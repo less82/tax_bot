@@ -1,0 +1,18 @@
+# Environment variables
+.env
+env/
+venv/
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Data (Optional: exclude large files if using Git LFS, but here we keep DB)
+# data/
+
+# Streamlit
+.streamlit/
+
+# OS
+.DS_Store
