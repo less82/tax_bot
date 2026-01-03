@@ -11,7 +11,8 @@ def ingest_data():
     documents = []
     
     import glob
-    # Load 2024 PDF
+    import glob
+    # 2024년 PDF 로드
     pdf_files = glob.glob("data/2024*.pdf")
     if pdf_files:
         pdf_path = pdf_files[0]
@@ -21,7 +22,7 @@ def ingest_data():
     else:
         print(f"Warning: No 2024 PDF found in data/.")
 
-    # Load 2025 Text
+    # 2025년 텍스트 로드
     txt_path = "data/2025년 개정세법.txt"
     if os.path.exists(txt_path):
         print(f"Loading {txt_path}...")
@@ -34,7 +35,7 @@ def ingest_data():
         print("No documents loaded.")
         return
 
-    # Split documents
+    # 문서 분할
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
         chunk_overlap=200,
@@ -43,13 +44,13 @@ def ingest_data():
     splits = text_splitter.split_documents(documents)
     print(f"Split into {len(splits)} chunks.")
 
-    # Create Embeddings and Vector Store
+    # 임베딩 생성 및 벡터 저장소 구축
     embeddings = OpenAIEmbeddings()
     persist_directory = "chroma_db"
     
     print("Creating vector store...")
     
-    # Batch processing to avoid rate limits
+    # API 속도 제한 방지를 위한 배치 처리
     batch_size = 100
     import time
 
@@ -67,7 +68,7 @@ def ingest_data():
             )
         else:
             vectordb.add_documents(batch)
-        time.sleep(1) # Sleep to respect rate limits
+        time.sleep(1) # 속도 제한 준수를 위해 대기
 
     print(f"Vector store created in {persist_directory}")
 

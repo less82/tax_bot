@@ -11,6 +11,7 @@ from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.chains import create_history_aware_retriever
+from langchain_core.documents import Document
 
 load_dotenv()
 
@@ -25,16 +26,17 @@ st.markdown("""
 # Initialize Chat Chain
 @st.cache_resource
 def get_chain():
-    # 1. Setup Vector Store
+    # 1. 벡터 저장소 설정
     embeddings = OpenAIEmbeddings()
     vectorstore = Chroma(persist_directory="chroma_db", embedding_function=embeddings)
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+    # k값을 10으로 늘려 '2025년에 바뀐 점' 같은 포괄적인 질문에 대해 충분한 문맥을 확보합니다.
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
     
-    # 2. Setup LLM
+    # 2. LLM 설정
     llm = ChatOpenAI(temperature=0, model_name="gpt-4o")
 
-    # 3. Contextualize Question (History Aware Retriever)
-    # This chain rewrites the question based on history to make it standalone
+    # 3. 질문 맥락화 (대화 기록 반영)
+    # 이 체인은 대화 기록을 바탕으로 사용자의 질문을 재구성하여 독립적인 질문으로 만듭니다.
     contextualize_q_system_prompt = """Given a chat history and the latest user question \
     which might reference context in the chat history, formulate a standalone question \
     which can be understood without the chat history. Do NOT answer the question, \
@@ -51,20 +53,20 @@ def get_chain():
         llm, retriever, contextualize_q_prompt
     )
 
-    # 4. Answer Question (Stuff Documents Chain)
-    # This chain takes the documents and the question and generates the answer
-    qa_system_prompt = """당신은 한국 세무 전문가입니다. 다음 문맥(context)을 사용하여 질문에 답변하세요.
-    
-    문맥:
+    # 4. 질문 답변 체인 (Stuff Documents Chain)
+    # 이 체인은 문서와 질문을 받아 답변을 생성합니다.
+    qa_system_prompt = """당신은 한국 연말정산 및 세법 전문가입니다. 
+    아래 제공된 [문맥(Context)]을 바탕으로 질문에 답변하세요.
+
+    [문맥(Context)]:
     {context}
     
-    규칙:
-    1. 2025년 개정세법 내용이 있다면 이를 최우선으로 반영하세요.
-    2. 문맥에 없는 내용은 지어내지 말고 "제공된 자료에서 관련 내용을 찾을 수 없습니다"라고 답하세요.
-    3. 친절하고 이해하기 쉽게 설명하세요.
-    4. 관련된 내용이 2024년 자료와 2025년 개정안에 모두 있다면, 개정안을 기준으로 설명하고 변경 전 내용도 간략히 언급해주세요.
-    
-    답변은 한국어로 작성하세요."""
+    [답변 규칙]:
+    1. **최우선 순위**: '2025년 개정세법' 또는 '2025년 귀속'과 관련된 내용이 문맥에 있다면, 이를 2024년 자료보다 우선하여 자세히 설명하세요.
+    2. 질문이 '개정된 내용'이나 '달라진 점'을 묻는다면, 문맥에서 '개정', '신설', '확대', '인상' 등의 키워드가 포함된 내용을 종합하여 정리해 주세요.
+    3. 문맥에 정답이 없다면 솔직하게 "제공된 자료에서 해당 내용을 찾을 수 없습니다."라고 답하세요. (단, 2025년 개정 내용이 조금이라도 보이면 최대한 활용하세요.)
+    4. 답변은 친절하고 전문적인 한국어로 작성하세요.
+    """
     
     qa_prompt = ChatPromptTemplate.from_messages(
         [
@@ -75,12 +77,12 @@ def get_chain():
     )
     question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
 
-    # 5. Final Retrieval Chain
+    # 5. 최종 검색 체인
     rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
     
     return rag_chain
 
-# Session State for Chat History
+# 대화 기록을 위한 세션 상태
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -91,18 +93,18 @@ session_id = "user_session"
 if session_id not in st.session_state.store:
     st.session_state.store[session_id] = ChatMessageHistory()
 
-# Helper to manage history manually since Streamlit reruns
+# Streamlit이 다시 실행될 때 기록을 수동으로 관리하기 위한 헬퍼 함수
 def get_session_history(session_id: str) -> BaseChatMessageHistory:
     return st.session_state.store[session_id]
 
 chain = get_chain()
 
-# Display chat messages
+# 대화 메시지 표시
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# User input
+# 사용자 입력
 if prompt := st.chat_input("연말정산에 대해 궁금한 점을 물어보세요!"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -111,31 +113,62 @@ if prompt := st.chat_input("연말정산에 대해 궁금한 점을 물어보세
     with st.chat_message("assistant"):
         with st.spinner("답변을 생성 중입니다..."):
             
-            # Convert streamlit history to LangChain history format for current run
+            # 현재 실행을 위해 Streamlit 기록을 LangChain 기록 형식으로 변환
             current_history = get_session_history(session_id)
-            # (Optional: Sync session_state messages to history object if needed, 
-            # but usually RunnableWithMessageHistory handles persistence. 
-            # Here we just use the manual history passing for simplicity or update it.)
+            # (선택 사항: 필요한 경우 세션 상태 메시지를 히스토리 객체에 동기화하지만, 
+            # 보통 RunnableWithMessageHistory가 지속성을 처리합니다. 
+            # 여기서는 단순히 수동으로 기록을 전달하거나 업데이트합니다.)
             
-            # Since we are managing history manually in session_state for UI, 
-            # we need to ensure the chain gets the correct history format.
-            # However, create_retrieval_chain expects 'chat_history' in input 
-            # if we don't use RunnableWithMessageHistory wrapper.
-            # Let's manually construct chat_history from session_state for the invoke.
+            # UI를 위해 session_state에서 기록을 수동으로 관리하므로, 
+            # 체인이 올바른 기록 형식을 받도록 해야 합니다.
+            # 하지만 create_retrieval_chain은 RunnableWithMessageHistory 래퍼를 사용하지 않는 경우 
+            # 입력에 'chat_history'가 필요합니다.
+            # invoke를 위해 session_state에서 chat_history를 수동으로 구성합니다.
             
             from langchain_core.messages import HumanMessage, AIMessage
             chat_history = []
-            for msg in st.session_state.messages[:-1]: # Exclude current prompt
+            for msg in st.session_state.messages[:-1]: # 현재 프롬프트 제외
                 if msg["role"] == "user":
                     chat_history.append(HumanMessage(content=msg["content"]))
                 elif msg["role"] == "assistant":
                     chat_history.append(AIMessage(content=msg["content"]))
 
-            response_dict = chain.invoke({"input": prompt, "chat_history": chat_history})
-            response = response_dict["answer"]
+            # RAG Chain Invoke
+            # "2025"와 "개정"이 포함된 질문인 경우, 2025년 전체 데이터를 문맥에 추가하여 요약 답변 유도
+            if "2025" in prompt and ("개정" in prompt or "달라진" in prompt or "변화" in prompt):
+                with open("data/2025년 개정세법.txt", "r", encoding="utf-8") as f:
+                    full_2025_text = f.read()
+                
+                # 별도의 RAG 체인을 타지 않고, 전체 텍스트를 LLM에 직접 전달하여 요약합니다.
+                # (기존 RAG 체인을 재사용하려다 내부 변수 불일치 오류가 발생했으므로 단순화)
+                
+                # LLM 직접 호출
+                messages = [
+                    ("system", """당신은 한국 연말정산 및 세법 전문가입니다. 
+아래 제공된 [2025년 개정세법 전문]을 바탕으로 질문에 대해 상세히 요약해서 답변하세요.
+내용이 많으므로 핵심적인 변화 위주로, 카테고리별로 잘 정리해서 답변하세요.
+
+[2025년 개정세법 전문]:
+""" + full_2025_text),
+                    ("human", prompt)
+                ]
+                
+                # 별도의 LLM 인스턴스 사용
+                temp_llm = ChatOpenAI(temperature=0, model_name="gpt-4o")
+                response_msg = temp_llm.invoke(messages)
+                response = response_msg.content
+                
+                # 출처 표기용 가짜 context
+                sources = [Document(page_content="2025년 개정세법 전체 데이터 (요약 모드)", metadata={"source": "data/2025년 개정세법.txt"})]
+                response_dict = {"answer": response, "context": sources}
+
+            else:
+                # 일반적인 RAG 실행
+                response_dict = chain.invoke({"input": prompt, "chat_history": chat_history})
+                response = response_dict["answer"]
+                sources = response_dict.get('context', [])
             
-            # Source attribution
-            sources = response_dict.get('context', [])
+            # 출처 표기 (Source attribution)
             if sources:
                 with st.expander("참고 자료"):
                     seen_sources = set()
